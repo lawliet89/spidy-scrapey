@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use std::hash::{Hash, Hasher};
 
 // Hard-coded from https://www.gw2spidy.com/api/v0.9/json/rarities
 enum_number!(Rarity {
@@ -12,7 +13,7 @@ enum_number!(Rarity {
     Legendary = 7,
 });
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Item {
     #[serde(rename = "data_id")]
     pub id: u64,
@@ -33,6 +34,12 @@ pub struct Item {
     // TODO
     pub type_id: u64,
     pub sub_type_id: u64,
+}
+
+impl Hash for Item {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.id);
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]

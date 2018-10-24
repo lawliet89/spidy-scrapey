@@ -3,7 +3,6 @@ use backoff::ExponentialBackoff;
 use data;
 use reqwest::{Client, Error};
 use serde::de::DeserializeOwned;
-use serde_json;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -87,9 +86,7 @@ impl Api {
             sleep(duration);
 
             let url = [base_url, format!("{}", page_number).as_str()].join("/");
-            let result = client.get(&url).send()?.text()?;
-
-            let result: R = serde_json::from_str(&result).unwrap();
+            let result: R = client.get(&url).send()?.json()?;
             info!(
                 "\t fetching page {} of {}",
                 result.page(),
@@ -133,6 +130,16 @@ impl Api {
         let base_url = [base_url.as_str(), "all"].join("/");
 
         self.paginate_api::<Items, data::Item>(&base_url)
+    }
+
+    pub fn item(&self, id: u64) -> Result<data::Item, Error> {
+        let base_url = self.api_method_url("item");
+        let url = [base_url.as_str(), &format!("{}", id)].join("/");
+
+        let client = Client::new();
+        info!("Requesting Item data for ID {}", id);
+        let result: Item = client.get(&url).send()?.json()?;
+        Ok(result.result)
     }
 }
 
@@ -203,4 +210,9 @@ impl PaginatedResult<data::ItemListing> for ItemListings {
     fn results(self) -> Vec<data::ItemListing> {
         self.results
     }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Item {
+    pub result: data::Item,
 }
