@@ -9,6 +9,7 @@ extern crate backoff;
 extern crate chrono;
 extern crate csv;
 extern crate failure;
+extern crate itertools;
 extern crate reqwest;
 extern crate serde;
 extern crate serde_json;
@@ -21,6 +22,7 @@ mod data;
 
 use clap::{App, AppSettings, Arg, ArgMatches};
 use csv::WriterBuilder;
+use itertools::Itertools;
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
@@ -110,9 +112,9 @@ fn search_items<'a>(api: &api::Api, args: &ArgMatches<'a>) -> Result<Vec<u64>, f
             }
             result
         }).collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+        .into_iter();
+
+    let item_searches = Iterator::flatten(item_searches).collect::<Vec<_>>();
 
     info!("Items found: {:?}", item_searches);
 
@@ -123,7 +125,6 @@ fn listings<'a, I>(api: &api::Api, args: &ArgMatches<'a>, items: I) -> Result<()
 where
     I: Iterator<Item = u64>,
 {
-
     Ok(())
 }
 
@@ -146,7 +147,7 @@ fn main() -> Result<(), failure::Error> {
 
     let item_ids: BTreeSet<u64> = item_ids.into_iter().collect();
     info!("Requesting listing pricing for {:?}", item_ids);
-    listings(&api,&args, item_ids.into_iter())
+    listings(&api, &args, item_ids.into_iter())
     // let listings = api.listings(19976, api::ListingType::Buy)?;
 
     // let mut wtr = WriterBuilder::new().from_path("test.csv")?;
