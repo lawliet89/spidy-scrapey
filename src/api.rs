@@ -127,6 +127,13 @@ impl Api {
 
         self.paginate_api::<Items, data::Item>(&base_url)
     }
+
+    pub fn items(&self) -> Result<Vec<data::Item>, Error> {
+        let base_url = self.api_method_url("items");
+        let base_url = [base_url.as_str(), "all"].join("/");
+
+        self.paginate_api::<Items, data::Item>(&base_url)
+    }
 }
 
 impl Default for Api {

@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use serde::Deserializer;
 
 // Hard-coded from https://www.gw2spidy.com/api/v0.9/json/rarities
 enum_number!(Rarity {
@@ -28,8 +27,8 @@ pub struct Item {
     pub offer_availability: u64,
     pub sale_availability: u64,
 
-    pub sale_price_change_last_hour: u32,
-    pub offer_price_change_last_hour: u32,
+    pub sale_price_change_last_hour: i32,
+    pub offer_price_change_last_hour: i32,
 
     // TODO
     pub type_id: u64,
@@ -38,7 +37,6 @@ pub struct Item {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ItemListing {
-    // serialize_with = "serialize_time"
     #[serde(
         rename = "listing_datetime",
         with = "::custom_serde::timestamp"

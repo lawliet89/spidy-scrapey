@@ -20,11 +20,37 @@ mod custom_serde;
 mod api;
 mod data;
 
+use chrono::{DateTime, Utc};
 use clap::{App, AppSettings, Arg, ArgMatches};
-use csv::WriterBuilder;
 use itertools::Itertools;
-use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
 use std::str::FromStr;
+
+// Output Listing
+#[derive(Serialize, Debug)]
+struct ListingOutput<'a> {
+    #[serde(with = "::custom_serde::timestamp")]
+    pub timestamp: &'a DateTime<Utc>,
+
+    #[serde(rename = "type")]
+    pub listing_type: api::ListingType,
+    pub unit_price: u64,
+    pub quantity: u64,
+    pub listings: u64,
+}
+
+impl<'a> ListingOutput<'a> {
+    pub fn from_listing(listing: &'a data::ItemListing, listing_type: api::ListingType) -> Self {
+        Self {
+            timestamp: &listing.timestamp,
+            listing_type,
+            unit_price: listing.unit_price,
+            quantity: listing.quantity,
+            listings: listing.listings,
+        }
+    }
+}
 
 fn make_parser<'a, 'b>() -> App<'a, 'b>
 where
@@ -88,7 +114,7 @@ where
 fn search_items<'a>(api: &api::Api, args: &ArgMatches<'a>) -> Result<Vec<u64>, failure::Error> {
     let item_names: Vec<&str> = match args.values_of("item_name") {
         Some(items) => items.collect(),
-        None => vec![],
+        None => return Ok(vec![]),
     };
 
     info!("Item names to search for: {}", item_names.join(", "));
@@ -126,13 +152,49 @@ where
     I: Iterator<Item = u64>,
 {
     let items = items.unique();
+    let output = args.value_of("output").expect("Value to be present");
+    let output = Path::new(output);
 
+    let output = if output.is_relative() {
+        std::env::current_dir()?.join(output)
+    } else {
+        output.to_path_buf()
+    };
+
+    fs::create_dir_all(&output)?;
+
+    for item in items {
+        let buy = api.listings(item, api::ListingType::Buy)?;
+        let sell = api.listings(item, api::ListingType::Sell)?;
+
+        let buy_output = buy
+            .iter()
+            .map(|listing| ListingOutput::from_listing(listing, api::ListingType::Buy))
+            .rev();
+
+        let sell_output = sell
+            .iter()
+            .map(|listing| ListingOutput::from_listing(listing, api::ListingType::Sell))
+            .rev();
+
+        let listings_output =
+            buy_output.merge_by(sell_output, |left, right| left.timestamp <= right.timestamp);
+
+        let path = output.join(format!("{}.csv", item));
+        let mut wtr = csv::Writer::from_path(&path)?;
+
+        for listing in listings_output {
+            wtr.serialize(listing)?;
+        }
+    }
     Ok(())
 }
 
 fn main() -> Result<(), failure::Error> {
     let args = make_parser().get_matches();
     let verbose = args.occurrences_of("verbosity") as usize;
+    let verbose = if verbose == 0 { 2 } else { verbose };
+
     stderrlog::new().verbosity(verbose).init()?;
 
     let api = api::Api::new(
@@ -141,7 +203,8 @@ fn main() -> Result<(), failure::Error> {
     );
 
     let item_ids: Box<Iterator<Item = u64>> = if args.occurrences_of("all") > 0 {
-        Box::new(std::iter::empty::<u64>().into_iter())
+        info!("Retrieving data for ALL items");
+        Box::new(api.items()?.into_iter().map(|item| item.id))
     } else {
         let args_item_ids: Vec<u64> = match args.values_of("item_id") {
             Some(ids) => {
@@ -159,11 +222,4 @@ fn main() -> Result<(), failure::Error> {
     };
 
     listings(&api, &args, item_ids.into_iter())
-    // let listings = api.listings(19976, api::ListingType::Buy)?;
-
-    // let mut wtr = WriterBuilder::new().from_path("test.csv")?;
-
-    // for listing in listings.iter() {
-    //     wtr.serialize(listing)?;
-    // }
 }
