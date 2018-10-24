@@ -65,7 +65,11 @@ impl Api {
             let result = client.get(&url).send()?.text()?;
 
             let result: R = serde_json::from_str(&result).unwrap();
-            info!("\t fetching page {} of {}", result.page(), result.last_page());
+            info!(
+                "\t fetching page {} of {}",
+                result.page(),
+                result.last_page()
+            );
 
             total_pages = result.last_page();
             page_number = result.page() + 1;
