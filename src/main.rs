@@ -111,50 +111,14 @@ where
         )
 }
 
-fn search_items<'a>(
-    api: &api::Api,
-    args: &ArgMatches<'a>,
-) -> Result<Vec<data::Item>, failure::Error> {
-    let item_names: Vec<&str> = match args.values_of("item_name") {
-        Some(items) => items.collect(),
-        None => return Ok(vec![]),
-    };
-
-    info!("Item names to search for: {}", item_names.join(", "));
-    let item_searches = item_names
-        .into_iter()
-        .map(|item| {
-            let result = api.item_search(item);
-            match &result {
-                Ok(v) => {
-                    let len = v.len();
-                    if len == 0 {
-                        warn!("Search term \"{}\" return no result", item);
-                    } else if len > 1 {
-                        warn!(
-                            "Search term \"{}\" returned more than one results ({} found)",
-                            item, len
-                        );
-                    }
-                }
-                Err(e) => error!("Error searching for \"{}\": {}", item, e),
-            }
-            result
-        }).collect::<Result<Vec<_>, _>>()?
-        .into_iter();
-
-    let item_searches = Iterator::flatten(item_searches).collect::<Vec<_>>();
-
-    info!("Items found: {:?}", item_searches);
-
-    Ok(item_searches)
-}
-
 fn listings<'a, I>(api: &api::Api, args: &ArgMatches<'a>, items: I) -> Result<(), failure::Error>
 where
-    I: Iterator<Item = data::Item>,
+    I: Iterator<Item = Result<data::Item, reqwest::Error>>,
 {
-    let items = items.unique();
+    let items = items.unique_by(|item| match item {
+        Ok(v) => v.name.to_string(),
+        Err(e) => format!("{}", e),
+    });
     let output = args.value_of("output").expect("Value to be present");
     let output = Path::new(output);
 
@@ -167,27 +131,32 @@ where
     fs::create_dir_all(&output)?;
 
     for item in items {
-        let buy = api.listings(item.id, api::ListingType::Buy)?;
-        let sell = api.listings(item.id, api::ListingType::Sell)?;
+        match item {
+            Ok(item) => {
+                let buy = api.listings(item.id, api::ListingType::Buy)?;
+                let sell = api.listings(item.id, api::ListingType::Sell)?;
 
-        let buy_output = buy
-            .iter()
-            .map(|listing| ListingOutput::from_listing(listing, api::ListingType::Buy))
-            .rev();
+                let buy_output = buy
+                    .iter()
+                    .map(|listing| ListingOutput::from_listing(listing, api::ListingType::Buy))
+                    .rev();
 
-        let sell_output = sell
-            .iter()
-            .map(|listing| ListingOutput::from_listing(listing, api::ListingType::Sell))
-            .rev();
+                let sell_output = sell
+                    .iter()
+                    .map(|listing| ListingOutput::from_listing(listing, api::ListingType::Sell))
+                    .rev();
 
-        let listings_output =
-            buy_output.merge_by(sell_output, |left, right| left.timestamp <= right.timestamp);
+                let listings_output = buy_output
+                    .merge_by(sell_output, |left, right| left.timestamp <= right.timestamp);
 
-        let path = output.join(format!("{}.csv", item.name));
-        let mut wtr = csv::Writer::from_path(&path)?;
+                let path = output.join(format!("{}.csv", item.name));
+                let mut wtr = csv::Writer::from_path(&path)?;
 
-        for listing in listings_output {
-            wtr.serialize(listing)?;
+                for listing in listings_output {
+                    wtr.serialize(listing)?;
+                }
+            }
+            Err(e) => error!("{}", e),
         }
     }
     Ok(())
@@ -205,9 +174,9 @@ fn main() -> Result<(), failure::Error> {
         value_t!(args, "max_backoff", u64).unwrap_or_else(|e| e.exit()),
     );
 
-    let item_ids: Box<Iterator<Item = data::Item>> = if args.occurrences_of("all") > 0 {
+    if args.occurrences_of("all") > 0 {
         info!("Retrieving data for ALL items");
-        Box::new(api.items()?.into_iter())
+        listings(&api, &args, api.items_lazy())
     } else {
         let args_item_ids: Vec<u64> = match args.values_of("item_id") {
             Some(ids) => {
@@ -219,17 +188,19 @@ fn main() -> Result<(), failure::Error> {
 
         let items = args_item_ids
             .into_iter()
-            .map(|id| api.item(id))
-            .collect::<Result<Vec<data::Item>, _>>()?;
+            .map(|id| api.item(id));
 
-        Box::new(
-            items
-                .into_iter()
-                .merge_by(search_items(&api, &args)?.into_iter(), |left, right| {
-                    left.id <= right.id
-                }),
-        )
-    };
+        let item_names: Vec<&str> = match args.values_of("item_name") {
+            Some(items) => items.collect(),
+            None => vec![],
+        };
 
-    listings(&api, &args, item_ids.into_iter())
+        let item_searches = item_names.into_iter().map(|item| {
+            info!("Including items from search term \"{}\"", item);
+            api.item_search_lazy(item)
+        });
+
+        let item_searches = Iterator::flatten(item_searches);
+        listings(&api, &args, items.chain(item_searches))
+    }
 }

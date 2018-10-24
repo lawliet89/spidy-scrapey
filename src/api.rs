@@ -3,10 +3,13 @@ use backoff::ExponentialBackoff;
 use data;
 use reqwest::{Client, Error};
 use serde::de::DeserializeOwned;
+use std::collections::VecDeque;
+use std::iter::FromIterator;
+use std::marker;
 use std::thread::sleep;
 use std::time::Duration;
 
-trait PaginatedResult<T> {
+pub trait PaginatedResult<T> {
     fn page(&self) -> u64;
     fn last_page(&self) -> u64;
     fn results(self) -> Vec<T>;
@@ -20,8 +23,69 @@ pub struct Api {
 }
 
 pub enum ApiFormat {
+    #[allow(dead_code)]
     Csv,
     Json,
+}
+
+pub struct PaginatedIterator<R, T> {
+    base_url: String,
+    client: Client,
+    page_number: u64,
+    total_pages: u64,
+    page: VecDeque<T>,
+    backoff: ExponentialBackoff,
+    _marker: marker::PhantomData<R>,
+}
+
+impl<R, T> Iterator for PaginatedIterator<R, T>
+where
+    R: DeserializeOwned + PaginatedResult<T>,
+{
+    type Item = Result<T, Error>;
+
+    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+        if self.page.is_empty() {
+            if self.page_number > self.total_pages {
+                // We are done
+                return None;
+            } else {
+                // Request for a new page
+                let duration = self
+                    .backoff
+                    .next_backoff()
+                    .unwrap_or_else(|| Duration::new(0, 0));
+                info!(
+                    "Sleeping {}.{} seconds before the next request",
+                    duration.as_secs(),
+                    duration.subsec_millis()
+                );
+
+                let url = [&self.base_url, format!("{}", self.page_number).as_str()].join("/");
+                info!("Making paginated requests for API {}", url);
+                let result = self.client.get(&url).send();
+
+                if let Err(e) = result {
+                    return Some(Err(e));
+                }
+
+                let result: Result<R, Error> = result.expect("OK to unwrap").json();
+
+                if let Err(e) = result {
+                    return Some(Err(e));
+                }
+
+                let result = result.expect("OK to unwrap");
+                info!("\t Page {} of {}", result.page(), result.last_page());
+
+                self.total_pages = result.last_page();
+                self.page_number = result.page() + 1;
+
+                self.page = VecDeque::from_iter(result.results().into_iter());
+            }
+        }
+        Some(Ok(self.page.pop_front().expect("Not to be empty")))
+    }
 }
 
 impl ToString for ApiFormat {
@@ -59,6 +123,21 @@ impl Api {
             method,
         ]
             .join("/")
+    }
+
+    fn paginate_api_lazy<R, T>(&self, base_url: &str) -> PaginatedIterator<R, T>
+    where
+        R: DeserializeOwned + PaginatedResult<T>,
+    {
+        PaginatedIterator::<R, T> {
+            base_url: base_url.to_string(),
+            client: Client::new(),
+            page_number: 1,
+            total_pages: 1,
+            page: VecDeque::new(),
+            backoff: self.new_backoff(),
+            _marker: Default::default(),
+        }
     }
 
     fn paginate_api<R, T>(&self, base_url: &str) -> Result<Vec<T>, Error>
@@ -125,11 +204,25 @@ impl Api {
         self.paginate_api::<Items, data::Item>(&base_url)
     }
 
+    pub fn item_search_lazy(&self, search: &str) -> PaginatedIterator<Items, data::Item> {
+        let base_url = self.api_method_url("item-search");
+        let base_url = [base_url.as_str(), &format!("{}", search)].join("/");
+
+        self.paginate_api_lazy(&base_url)
+    }
+
     pub fn items(&self) -> Result<Vec<data::Item>, Error> {
         let base_url = self.api_method_url("items");
         let base_url = [base_url.as_str(), "all"].join("/");
 
         self.paginate_api::<Items, data::Item>(&base_url)
+    }
+
+    pub fn items_lazy(&self) -> PaginatedIterator<Items, data::Item> {
+        let base_url = self.api_method_url("items");
+        let base_url = [base_url.as_str(), "all"].join("/");
+
+        self.paginate_api_lazy(&base_url)
     }
 
     pub fn item(&self, id: u64) -> Result<data::Item, Error> {
