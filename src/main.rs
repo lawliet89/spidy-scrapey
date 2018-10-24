@@ -125,6 +125,8 @@ fn listings<'a, I>(api: &api::Api, args: &ArgMatches<'a>, items: I) -> Result<()
 where
     I: Iterator<Item = u64>,
 {
+    let items = items.unique();
+
     Ok(())
 }
 
@@ -133,20 +135,29 @@ fn main() -> Result<(), failure::Error> {
     let verbose = args.occurrences_of("verbosity") as usize;
     stderrlog::new().verbosity(verbose).init()?;
 
-    let api = api::Api::default();
+    let api = api::Api::new(
+        api::ApiFormat::Json,
+        value_t!(args, "max_backoff", u64).unwrap_or_else(|e| e.exit()),
+    );
 
-    let mut item_ids: Vec<u64> = match args.values_of("item_id") {
-        Some(ids) => {
-            let ids: Result<Vec<u64>, _> = ids.map(FromStr::from_str).collect();
-            ids?
-        }
-        None => vec![],
+    let item_ids: Box<Iterator<Item = u64>> = if args.occurrences_of("all") > 0 {
+        Box::new(std::iter::empty::<u64>().into_iter())
+    } else {
+        let args_item_ids: Vec<u64> = match args.values_of("item_id") {
+            Some(ids) => {
+                let ids: Result<Vec<u64>, _> = ids.map(FromStr::from_str).collect();
+                ids?
+            }
+            None => vec![],
+        };
+
+        Box::new(
+            args_item_ids
+                .into_iter()
+                .merge(search_items(&api, &args)?.into_iter()),
+        )
     };
 
-    item_ids.append(&mut search_items(&api, &args)?);
-
-    let item_ids: BTreeSet<u64> = item_ids.into_iter().collect();
-    info!("Requesting listing pricing for {:?}", item_ids);
     listings(&api, &args, item_ids.into_iter())
     // let listings = api.listings(19976, api::ListingType::Buy)?;
 

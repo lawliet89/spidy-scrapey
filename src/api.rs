@@ -1,7 +1,11 @@
+use backoff::backoff::Backoff;
+use backoff::ExponentialBackoff;
 use data;
 use reqwest::{Client, Error};
 use serde::de::DeserializeOwned;
 use serde_json;
+use std::thread::sleep;
+use std::time::Duration;
 
 trait PaginatedResult<T> {
     fn page(&self) -> u64;
@@ -13,6 +17,7 @@ pub struct Api {
     version: String,
     format: ApiFormat,
     base_url: String,
+    max_interval: u64,
 }
 
 pub enum ApiFormat {
@@ -30,12 +35,20 @@ impl ToString for ApiFormat {
 }
 
 impl Api {
-    fn new(format: ApiFormat) -> Self {
+    pub fn new(format: ApiFormat, max_interval: u64) -> Self {
         info!("Creating API Client for v0.9");
         Self {
             version: "v0.9".to_string(),
             format: format,
             base_url: "https://www.gw2spidy.com/api".to_string(),
+            max_interval,
+        }
+    }
+
+    fn new_backoff(&self) -> ExponentialBackoff {
+        ExponentialBackoff {
+            max_interval: Duration::new(self.max_interval, 0),
+            ..Default::default()
         }
     }
 
@@ -58,9 +71,21 @@ impl Api {
         let mut results = vec![];
         let client = Client::new();
 
+        let mut backoff = self.new_backoff();
+
         info!("Making paginated requests for API {}", base_url);
 
         while page_number <= total_pages {
+            let duration = backoff
+                .next_backoff()
+                .unwrap_or_else(|| Duration::new(0, 0));
+            info!(
+                "Sleeping {}.{} seconds before the next request",
+                duration.as_secs(),
+                duration.subsec_millis()
+            );
+            sleep(duration);
+
             let url = [base_url, format!("{}", page_number).as_str()].join("/");
             let result = client.get(&url).send()?.text()?;
 
@@ -106,7 +131,7 @@ impl Api {
 
 impl Default for Api {
     fn default() -> Self {
-        Self::new(ApiFormat::Json)
+        Self::new(ApiFormat::Json, 1)
     }
 }
 
