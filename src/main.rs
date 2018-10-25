@@ -115,10 +115,6 @@ fn listings<'a, I>(api: &api::Api, args: &ArgMatches<'a>, items: I) -> Result<()
 where
     I: Iterator<Item = Result<data::Item, reqwest::Error>>,
 {
-    let items = items.unique_by(|item| match item {
-        Ok(v) => v.name.to_string(),
-        Err(e) => format!("{}", e),
-    });
     let output = args.value_of("output").expect("Value to be present");
     let output = Path::new(output);
 
@@ -186,9 +182,7 @@ fn main() -> Result<(), failure::Error> {
             None => vec![],
         };
 
-        let items = args_item_ids
-            .into_iter()
-            .map(|id| api.item(id));
+        let items = args_item_ids.into_iter().map(|id| api.item(id));
 
         let item_names: Vec<&str> = match args.values_of("item_name") {
             Some(items) => items.collect(),
@@ -200,7 +194,12 @@ fn main() -> Result<(), failure::Error> {
             api.item_search_lazy(item)
         });
 
-        let item_searches = Iterator::flatten(item_searches);
-        listings(&api, &args, items.chain(item_searches))
+        let item_searches = Iterator::flatten(item_searches)
+            .chain(items)
+            .unique_by(|item| match item {
+                Ok(v) => v.name.to_string(),
+                Err(e) => format!("{}", e),
+            });
+        listings(&api, &args, item_searches)
     }
 }
