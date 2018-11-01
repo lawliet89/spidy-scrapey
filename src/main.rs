@@ -23,7 +23,9 @@ mod data;
 use chrono::{DateTime, Utc};
 use clap::{App, AppSettings, Arg, ArgMatches};
 use itertools::Itertools;
+use std::fmt;
 use std::fs;
+use std::ops::Deref;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -49,6 +51,38 @@ impl<'a> ListingOutput<'a> {
             quantity: listing.quantity,
             listings: listing.listings,
         }
+    }
+}
+
+/// "Total" count
+pub struct Total(Option<usize>);
+
+impl Deref for Total {
+    type Target = Option<usize>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Default for Total {
+    fn default() -> Self {
+        Total(None)
+    }
+}
+
+impl fmt::Display for Total {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            None => write!(f, "unknown"),
+            Some(count) => write!(f, "{}", count),
+        }
+    }
+}
+
+impl From<Option<usize>> for Total {
+    fn from(count: Option<usize>) -> Self {
+        Total(count)
     }
 }
 
@@ -126,9 +160,20 @@ where
 
     fs::create_dir_all(&output)?;
 
-    for item in items {
+    let mut counter: usize = 1;
+
+    let mut items = items.peekable();
+    let (_, hint) = items.size_hint();
+    let total: Total = From::from(hint);
+
+    while items.peek().is_some() {
+        let item = items.next().expect("to be some");
         match item {
             Ok(item) => {
+                info!(
+                    "[{} of {}] Fetching item listings for \"{}\"",
+                    counter, total, item.name
+                );
                 let buy = api.listings(item.id, api::ListingType::Buy)?;
                 let sell = api.listings(item.id, api::ListingType::Sell)?;
 
@@ -146,15 +191,25 @@ where
                     .merge_by(sell_output, |left, right| left.timestamp <= right.timestamp);
 
                 let path = output.join(format!("{}.csv", item.name));
+                info!(
+                    "[{} of {}] Writing item listings for \"{}\" to \"{}\"",
+                    counter,
+                    total,
+                    item.name,
+                    path.to_str().unwrap_or_else(|| "unknown")
+                );
                 let mut wtr = csv::Writer::from_path(&path)?;
 
                 for listing in listings_output {
                     wtr.serialize(listing)?;
                 }
+
+                counter = counter + 1;
             }
             Err(e) => error!("{}", e),
         }
     }
+
     Ok(())
 }
 
@@ -194,12 +249,12 @@ fn main() -> Result<(), failure::Error> {
             api.item_search_lazy(item)
         });
 
-        let item_searches = Iterator::flatten(item_searches)
+        let items = Iterator::flatten(item_searches)
             .chain(items)
             .unique_by(|item| match item {
                 Ok(v) => v.name.to_string(),
                 Err(e) => format!("{}", e),
             });
-        listings(&api, &args, item_searches)
+        listings(&api, &args, items)
     }
 }

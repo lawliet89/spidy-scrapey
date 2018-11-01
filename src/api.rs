@@ -13,6 +13,9 @@ pub trait PaginatedResult<T> {
     fn page(&self) -> u64;
     fn last_page(&self) -> u64;
     fn results(self) -> Vec<T>;
+    fn count(&self) -> Option<usize> {
+        None
+    }
 }
 
 pub struct Api {
@@ -35,6 +38,7 @@ pub struct PaginatedIterator<R, T> {
     total_pages: u64,
     page: VecDeque<T>,
     backoff: ExponentialBackoff,
+    size_hint: Option<usize>,
     _marker: marker::PhantomData<R>,
 }
 
@@ -55,14 +59,14 @@ where
                     .backoff
                     .next_backoff()
                     .unwrap_or_else(|| Duration::new(0, 0));
-                info!(
+                debug!(
                     "Sleeping {}.{} seconds before the next request",
                     duration.as_secs(),
                     duration.subsec_millis()
                 );
 
                 let url = [&self.base_url, format!("{}", self.page_number).as_str()].join("/");
-                info!("Making paginated requests for API {}", url);
+                debug!("Making paginated requests for API {}", url);
                 let result = self.client.get(&url).send();
 
                 if let Err(e) = result {
@@ -76,15 +80,23 @@ where
                 }
 
                 let result = result.expect("OK to unwrap");
-                info!("\t Page {} of {}", result.page(), result.last_page());
+                debug!("\t Page {} of {}", result.page(), result.last_page());
 
                 self.total_pages = result.last_page();
                 self.page_number = result.page() + 1;
+
+                if self.size_hint.is_none() {
+                    self.size_hint = result.count();
+                }
 
                 self.page = VecDeque::from_iter(result.results().into_iter());
             }
         }
         Some(Ok(self.page.pop_front().expect("Not to be empty")))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, self.size_hint)
     }
 }
 
@@ -99,7 +111,7 @@ impl ToString for ApiFormat {
 
 impl Api {
     pub fn new(format: ApiFormat, max_interval: u64) -> Self {
-        info!("Creating API Client for v0.9");
+        debug!("Creating API Client for v0.9");
         Self {
             version: "v0.9".to_string(),
             format: format,
@@ -136,6 +148,7 @@ impl Api {
             total_pages: 1,
             page: VecDeque::new(),
             backoff: self.new_backoff(),
+            size_hint: None,
             _marker: Default::default(),
         }
     }
@@ -151,13 +164,13 @@ impl Api {
 
         let mut backoff = self.new_backoff();
 
-        info!("Making paginated requests for API {}", base_url);
+        debug!("Making paginated requests for API {}", base_url);
 
         while page_number <= total_pages {
             let duration = backoff
                 .next_backoff()
                 .unwrap_or_else(|| Duration::new(0, 0));
-            info!(
+            debug!(
                 "Sleeping {}.{} seconds before the next request",
                 duration.as_secs(),
                 duration.subsec_millis()
@@ -166,7 +179,7 @@ impl Api {
 
             let url = [base_url, format!("{}", page_number).as_str()].join("/");
             let result: R = client.get(&url).send()?.json()?;
-            info!(
+            debug!(
                 "\t fetching page {} of {}",
                 result.page(),
                 result.last_page()
@@ -230,7 +243,7 @@ impl Api {
         let url = [base_url.as_str(), &format!("{}", id)].join("/");
 
         let client = Client::new();
-        info!("Requesting Item data for ID {}", id);
+        debug!("Requesting Item data for ID {}", id);
         let result: Item = client.get(&url).send()?.json()?;
         Ok(result.result)
     }
@@ -278,6 +291,10 @@ impl PaginatedResult<data::Item> for Items {
     fn results(self) -> Vec<data::Item> {
         self.results
     }
+
+    fn count(&self) -> Option<usize> {
+        Some((self.count * self.last_page) as usize)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -302,6 +319,10 @@ impl PaginatedResult<data::ItemListing> for ItemListings {
 
     fn results(self) -> Vec<data::ItemListing> {
         self.results
+    }
+
+    fn count(&self) -> Option<usize> {
+        Some((self.count * self.last_page) as usize)
     }
 }
 
