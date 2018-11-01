@@ -170,44 +170,61 @@ where
         let item = items.next().expect("to be some");
         match item {
             Ok(item) => {
-                info!(
-                    "[{} of {}] Fetching item listings for \"{}\"",
-                    counter, total, item.name
-                );
-                let buy = api.listings(item.id, api::ListingType::Buy)?;
-                let sell = api.listings(item.id, api::ListingType::Sell)?;
-
-                let buy_output = buy
-                    .iter()
-                    .map(|listing| ListingOutput::from_listing(listing, api::ListingType::Buy))
-                    .rev();
-
-                let sell_output = sell
-                    .iter()
-                    .map(|listing| ListingOutput::from_listing(listing, api::ListingType::Sell))
-                    .rev();
-
-                let listings_output = buy_output
-                    .merge_by(sell_output, |left, right| left.timestamp <= right.timestamp);
-
-                let path = output.join(format!("{}.csv", item.name));
-                info!(
-                    "[{} of {}] Writing item listings for \"{}\" to \"{}\"",
-                    counter,
-                    total,
-                    item.name,
-                    path.to_str().unwrap_or_else(|| "unknown")
-                );
-                let mut wtr = csv::Writer::from_path(&path)?;
-
-                for listing in listings_output {
-                    wtr.serialize(listing)?;
-                }
-
-                counter = counter + 1;
+                match listing(api, &item, &total, counter, &output) {
+                    Ok(()) => {
+                        counter = counter + 1;
+                    }
+                    Err(e) => {
+                        error!("Error with item {}: {}", item.name, e);
+                    }
+                };
             }
             Err(e) => error!("{}", e),
         }
+    }
+
+    Ok(())
+}
+
+fn listing(
+    api: &api::Api,
+    item: &data::Item,
+    total: &Total,
+    counter: usize,
+    output: &Path,
+) -> Result<(), failure::Error> {
+    info!(
+        "[{} of {}] Fetching item listings for \"{}\"",
+        counter, total, item.name
+    );
+    let buy = api.listings(item.id, api::ListingType::Buy)?;
+    let sell = api.listings(item.id, api::ListingType::Sell)?;
+
+    let buy_output = buy
+        .iter()
+        .map(|listing| ListingOutput::from_listing(listing, api::ListingType::Buy))
+        .rev();
+
+    let sell_output = sell
+        .iter()
+        .map(|listing| ListingOutput::from_listing(listing, api::ListingType::Sell))
+        .rev();
+
+    let listings_output =
+        buy_output.merge_by(sell_output, |left, right| left.timestamp <= right.timestamp);
+
+    let path = output.join(format!("{}.csv", item.name));
+    info!(
+        "[{} of {}] Writing item listings for \"{}\" to \"{}\"",
+        counter,
+        total,
+        item.name,
+        path.to_str().unwrap_or_else(|| "unknown")
+    );
+    let mut wtr = csv::Writer::from_path(&path)?;
+
+    for listing in listings_output {
+        wtr.serialize(listing)?;
     }
 
     Ok(())
